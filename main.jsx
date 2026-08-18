@@ -108,7 +108,7 @@ const initialProperties = [
     detail: '3 rec · 2 baños · 400 m² const. · 450 m² terreno', favorite: false
   },
   {
-    id: 'dulce-1', seller: 'Dulce', agency: '', phone: '', wa: '',
+    id: 'dulce-1', seller: 'Dulce', agency: '', phone: '+52 1 55 5452 4262', wa: '5215554524262',
     title: 'Casa amueblada en Lomas de Cocoyoc · EB-UJ1569', price: 4900000,
     image: 'https://assets.easybroker.com/property_images/5561569/96682552/EB-UJ1569.jpg?version=1759698693',
     url: 'https://www.pincali.com/inmueble/casa-amueblada-en-venta-en-lomas-de-cocoyoc',
