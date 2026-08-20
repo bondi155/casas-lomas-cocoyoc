@@ -136,6 +136,15 @@ function normalizeWa(phone) {
   return (phone || '').replace(/\D/g, '');
 }
 
+function normalizeSellerName(name) {
+  return (name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
 function App() {
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem('cocoyoc-properties-v2');
@@ -161,16 +170,26 @@ function App() {
   }), [items, seller, query, onlyFav]);
 
   const save = (value) => {
-    const normalized = {
-      ...value,
-      id: value.id || `property-${Date.now()}`,
-      price: value.price === '' ? null : Number(value.price),
-      wa: value.wa || normalizeWa(value.phone)
-    };
-    setItems(prev => prev.some(x => x.id === normalized.id)
-      ? prev.map(x => x.id === normalized.id ? normalized : x)
-      : [normalized, ...prev]
-    );
+    setItems(prev => {
+      const existingSeller = prev.find(x =>
+        x.id !== value.id &&
+        normalizeSellerName(x.seller) === normalizeSellerName(value.seller)
+      );
+
+      const normalized = {
+        ...value,
+        id: value.id || `property-${Date.now()}`,
+        seller: existingSeller ? existingSeller.seller : value.seller.trim().replace(/\s+/g, ' '),
+        agency: value.agency || existingSeller?.agency || '',
+        phone: value.phone || existingSeller?.phone || '',
+        price: value.price === '' ? null : Number(value.price),
+        wa: value.wa || existingSeller?.wa || normalizeWa(value.phone || existingSeller?.phone)
+      };
+
+      return prev.some(x => x.id === normalized.id)
+        ? prev.map(x => x.id === normalized.id ? normalized : x)
+        : [normalized, ...prev];
+    });
     setEditing(null);
   };
 
