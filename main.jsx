@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   Add, Call, Edit, Favorite, FavoriteBorder, Home, OpenInNew,
-  WhatsApp, Close, Search
+  WhatsApp, Close, Search, Delete
 } from '@mui/icons-material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 
@@ -145,33 +145,45 @@ function normalizeSellerName(name) {
     .toLowerCase();
 }
 
+function unifySellerData(source) {
+  const map = new Map();
+
+  source.forEach(item => {
+    const key = normalizeSellerName(item.seller);
+    if (!key) return;
+
+    const current = map.get(key) || {};
+    map.set(key, {
+      seller: current.seller || item.seller?.trim().replace(/\s+/g, ' '),
+      agency: current.agency || item.agency || '',
+      phone: current.phone || item.phone || '',
+      wa: current.wa || item.wa || normalizeWa(item.phone)
+    });
+  });
+
+  return source.map(item => {
+    const profile = map.get(normalizeSellerName(item.seller));
+    return profile ? { ...item, ...profile } : item;
+  });
+}
+
 function App() {
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem('cocoyoc-properties-v2');
     const source = saved ? JSON.parse(saved) : initialProperties;
-    const sellerMap = new Map();
-
-    source.forEach(item => {
-      const key = normalizeSellerName(item.seller);
-      if (!key) return;
-      const current = sellerMap.get(key) || {};
-      sellerMap.set(key, {
-        seller: current.seller || item.seller?.trim(),
-        agency: current.agency || item.agency || '',
-        phone: current.phone || item.phone || '',
-        wa: current.wa || item.wa || normalizeWa(item.phone)
-      });
-    });
-
-    return source.map(item => {
-      const sellerData = sellerMap.get(normalizeSellerName(item.seller));
-      return sellerData ? { ...item, ...sellerData } : item;
-    });
+    return unifySellerData(source);
   });
   const [seller, setSeller] = useState('Todos');
   const [query, setQuery] = useState('');
   const [onlyFav, setOnlyFav] = useState(false);
   const [editing, setEditing] = useState(null);
+
+  useEffect(() => {
+    setItems(prev => {
+      const unified = unifySellerData(prev);
+      return JSON.stringify(unified) === JSON.stringify(prev) ? prev : unified;
+    });
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('cocoyoc-properties-v2', JSON.stringify(items));
@@ -195,7 +207,7 @@ function App() {
   const sellers = useMemo(() => ['Todos', ...sellerProfiles.map(x => x.seller)], [sellerProfiles]);
 
   const filtered = useMemo(() => items.filter(x => {
-    const sellerOk = seller === 'Todos' || x.seller === seller;
+    const sellerOk = seller === 'Todos' || normalizeSellerName(x.seller) === normalizeSellerName(seller);
     const favOk = !onlyFav || x.favorite;
     const text = `${x.title} ${x.seller} ${x.detail}`.toLowerCase();
     const queryOk = text.includes(query.toLowerCase());
@@ -204,26 +216,50 @@ function App() {
 
   const save = (value) => {
     setItems(prev => {
+      const original = value.id ? prev.find(x => x.id === value.id) : null;
+      const oldSellerKey = normalizeSellerName(original?.seller);
+      const newSellerKey = normalizeSellerName(value.seller);
+
       const existingSeller = prev.find(x =>
         x.id !== value.id &&
-        normalizeSellerName(x.seller) === normalizeSellerName(value.seller)
+        normalizeSellerName(x.seller) === newSellerKey
       );
+
+      const profile = {
+        seller: existingSeller?.seller || value.seller.trim().replace(/\s+/g, ' '),
+        agency: value.agency || existingSeller?.agency || '',
+        phone: value.phone || existingSeller?.phone || '',
+        wa: value.wa || existingSeller?.wa || normalizeWa(value.phone || existingSeller?.phone)
+      };
 
       const normalized = {
         ...value,
         id: value.id || `property-${Date.now()}`,
-        seller: existingSeller ? existingSeller.seller : value.seller.trim().replace(/\s+/g, ' '),
-        agency: value.agency || existingSeller?.agency || '',
-        phone: value.phone || existingSeller?.phone || '',
-        price: value.price === '' ? null : Number(value.price),
-        wa: value.wa || existingSeller?.wa || normalizeWa(value.phone || existingSeller?.phone)
+        ...profile,
+        price: value.price === '' ? null : Number(value.price)
       };
 
-      return prev.some(x => x.id === normalized.id)
+      let next = prev.some(x => x.id === normalized.id)
         ? prev.map(x => x.id === normalized.id ? normalized : x)
         : [normalized, ...prev];
+
+      // Si editas datos de un vendedor, se actualizan en todas sus casas.
+      next = next.map(item => {
+        const key = normalizeSellerName(item.seller);
+        const belongsToSeller = key === newSellerKey || (oldSellerKey && key === oldSellerKey);
+        return belongsToSeller ? { ...item, ...profile } : item;
+      });
+
+      return unifySellerData(next);
     });
     setEditing(null);
+  };
+
+  const removeProperty = (id) => {
+    if (window.confirm('¿Borrar esta casa de la lista?')) {
+      setItems(prev => prev.filter(x => x.id !== id));
+      setEditing(null);
+    }
   };
 
   const toggleFavorite = id => setItems(prev => prev.map(x => x.id === id ? { ...x, favorite: !x.favorite } : x));
@@ -248,14 +284,27 @@ function App() {
               placeholder="Buscar casa o vendedor..."
               InputProps={{ startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} /> }}
             />
-            <Stack direction="row" spacing={1}>
-              <Select size="small" value={seller} onChange={e => setSeller(e.target.value)} sx={{ flex: 1, bgcolor: 'white' }}>
-                {sellers.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-              </Select>
-              <Button variant={onlyFav ? 'contained' : 'outlined'} onClick={() => setOnlyFav(v => !v)} startIcon={<Favorite />}>
-                Favoritas
-              </Button>
+            <Stack direction="row" spacing={1} sx={{ overflowX: 'auto', pb: .5 }}>
+              {sellers.map(s => (
+                <Chip
+                  key={s}
+                  label={s}
+                  clickable
+                  onClick={() => setSeller(s)}
+                  color={seller === s ? 'primary' : 'default'}
+                  variant={seller === s ? 'filled' : 'outlined'}
+                  sx={{ flexShrink: 0, bgcolor: seller === s ? undefined : 'white' }}
+                />
+              ))}
             </Stack>
+            <Button
+              variant={onlyFav ? 'contained' : 'outlined'}
+              onClick={() => setOnlyFav(v => !v)}
+              startIcon={<Favorite />}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              Favoritas
+            </Button>
           </Stack>
 
           <Stack spacing={2}>
@@ -279,6 +328,7 @@ function App() {
                         {item.favorite ? <Favorite color="error" /> : <FavoriteBorder />}
                       </IconButton>
                       <IconButton onClick={() => setEditing({ ...item })} aria-label="editar"><Edit /></IconButton>
+                      <IconButton onClick={() => removeProperty(item.id)} aria-label="borrar" color="error"><Delete /></IconButton>
                     </Stack>
                   </Stack>
 
@@ -311,25 +361,24 @@ function App() {
           <Add />
         </Fab>
 
-        <EditDialog value={editing} sellers={sellerProfiles} onClose={() => setEditing(null)} onSave={save} />
+        <EditDialog value={editing} sellers={sellerProfiles} onClose={() => setEditing(null)} onSave={save} onDelete={removeProperty} />
       </Box>
     </ThemeProvider>
   );
 }
 
-function EditDialog({ value, sellers, onClose, onSave }) {
+function EditDialog({ value, sellers, onClose, onSave, onDelete }) {
   const [form, setForm] = useState(value || emptyProperty);
-  const [sellerMode, setSellerMode] = useState('new');
+  const [sellerMode, setSellerMode] = useState('');
 
   useEffect(() => {
     setForm(value || emptyProperty);
     if (value?.id) {
-      const match = sellers.find(x => normalizeSellerName(x.seller) === normalizeSellerName(value.seller));
-      setSellerMode(match ? normalizeSellerName(match.seller) : 'new');
+      setSellerMode(normalizeSellerName(value.seller));
     } else {
       setSellerMode('');
     }
-  }, [value, sellers]);
+  }, [value]);
 
   if (!value) return null;
 
@@ -338,89 +387,141 @@ function EditDialog({ value, sellers, onClose, onSave }) {
     onChange: e => setForm(prev => ({ ...prev, [name]: e.target.value }))
   });
 
-  const selectSeller = e => {
-    const selected = e.target.value;
-    setSellerMode(selected);
-
-    if (selected === 'new') {
-      setForm(prev => ({
-        ...prev,
-        seller: '',
-        agency: '',
-        phone: '',
-        wa: ''
-      }));
-      return;
-    }
-
-    const profile = sellers.find(x => normalizeSellerName(x.seller) === selected);
-    if (profile) {
-      setForm(prev => ({
-        ...prev,
-        seller: profile.seller,
-        agency: profile.agency,
-        phone: profile.phone,
-        wa: profile.wa || normalizeWa(profile.phone)
-      }));
-    }
+  const chooseSeller = (profile) => {
+    setSellerMode(normalizeSellerName(profile.seller));
+    setForm(prev => ({
+      ...prev,
+      seller: profile.seller,
+      agency: profile.agency || '',
+      phone: profile.phone || '',
+      wa: profile.wa || normalizeWa(profile.phone)
+    }));
   };
+
+  const chooseNewSeller = () => {
+    setSellerMode('new');
+    setForm(prev => ({
+      ...prev,
+      seller: '',
+      agency: '',
+      phone: '',
+      wa: ''
+    }));
+  };
+
+  const sellerChosen = value.id || sellerMode;
 
   return (
     <Dialog open fullScreen onClose={onClose}>
       <AppBar position="sticky" elevation={0}>
         <Toolbar>
           <IconButton edge="start" color="inherit" onClick={onClose}><Close /></IconButton>
-          <Typography variant="h6" sx={{ flex: 1 }}>{value.id ? 'Editar propiedad' : 'Agregar propiedad'}</Typography>
-          <Button color="inherit" onClick={() => onSave(form)} sx={{ fontWeight: 800 }}>Guardar</Button>
+          <Typography variant="h6" sx={{ flex: 1 }}>
+            {value.id ? 'Editar propiedad' : 'Agregar propiedad'}
+          </Typography>
         </Toolbar>
       </AppBar>
-      <DialogContent>
+
+      <DialogContent sx={{ pb: 12 }}>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          {!value.id && (
-            <TextField
-              select
-              label="¿Quién vende esta casa?"
-              fullWidth
-              value={sellerMode}
-              onChange={selectSeller}
-              helperText="Elige un vendedor existente para precargar sus datos, o crea uno nuevo."
-            >
-              <MenuItem value="" disabled>Selecciona un vendedor</MenuItem>
-              {sellers.map(profile => (
-                <MenuItem key={normalizeSellerName(profile.seller)} value={normalizeSellerName(profile.seller)}>
-                  {profile.seller}
-                </MenuItem>
-              ))}
-              <MenuItem value="new">＋ Nuevo vendedor</MenuItem>
-            </TextField>
+          {!value.id && !sellerMode && (
+            <>
+              <Typography variant="h6" fontWeight={800}>¿Quién vende esta casa?</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Si eliges uno existente se cargan automáticamente su teléfono, WhatsApp e inmobiliaria.
+              </Typography>
+
+              <Stack spacing={1}>
+                {sellers.map(profile => (
+                  <Button
+                    key={normalizeSellerName(profile.seller)}
+                    variant="outlined"
+                    size="large"
+                    onClick={() => chooseSeller(profile)}
+                    sx={{ justifyContent: 'flex-start', py: 1.4 }}
+                  >
+                    {profile.seller}{profile.agency ? ` · ${profile.agency}` : ''}
+                  </Button>
+                ))}
+                <Button variant="contained" size="large" onClick={chooseNewSeller}>
+                  + Nuevo vendedor
+                </Button>
+              </Stack>
+            </>
           )}
 
-          <TextField label="Nombre de la casa" fullWidth {...field('title')} />
-          <TextField label="Precio" type="number" fullWidth {...field('price')} />
+          {sellerChosen && (
+            <>
+              {!value.id && (
+                <Button
+                  variant="text"
+                  onClick={() => {
+                    setSellerMode('');
+                    setForm({ ...emptyProperty });
+                  }}
+                  sx={{ alignSelf: 'flex-start' }}
+                >
+                  ← Cambiar vendedor
+                </Button>
+              )}
 
-          {(value.id || sellerMode === 'new') && (
-            <TextField label="Vendedor/a" fullWidth {...field('seller')} />
+              <TextField label="Nombre de la casa" fullWidth {...field('title')} />
+              <TextField label="Precio" type="number" fullWidth {...field('price')} />
+
+              {(value.id || sellerMode === 'new') && (
+                <TextField label="Vendedor/a" fullWidth {...field('seller')} />
+              )}
+
+              <TextField label="Inmobiliaria" fullWidth {...field('agency')} />
+              <TextField label="Teléfono" fullWidth {...field('phone')} />
+              <TextField label="WhatsApp (solo números)" fullWidth {...field('wa')} />
+              <TextField label="URL publicación" fullWidth {...field('url')} />
+              <TextField label="URL foto" fullWidth {...field('image')} />
+              <TextField label="Notas / características" fullWidth multiline minRows={3} {...field('detail')} />
+
+              {value.id && (
+                <Button
+                  color="error"
+                  variant="outlined"
+                  startIcon={<Delete />}
+                  onClick={() => onDelete(value.id)}
+                  sx={{ mt: 1 }}
+                >
+                  Borrar esta casa
+                </Button>
+              )}
+            </>
           )}
-
-          <TextField label="Inmobiliaria" fullWidth {...field('agency')} />
-          <TextField label="Teléfono" fullWidth {...field('phone')} />
-          <TextField label="WhatsApp (solo números)" fullWidth {...field('wa')} />
-          <TextField label="URL publicación" fullWidth {...field('url')} />
-          <TextField label="URL foto" fullWidth {...field('image')} />
-          <TextField label="Notas / características" fullWidth multiline minRows={3} {...field('detail')} />
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ p: 2 }}>
-        <Button onClick={onClose} fullWidth>Cancelar</Button>
-        <Button
-          onClick={() => onSave(form)}
-          fullWidth
-          variant="contained"
-          disabled={!form.seller?.trim()}
+
+      {sellerChosen && (
+        <Box
+          sx={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            p: 2,
+            bgcolor: 'background.paper',
+            borderTop: '1px solid',
+            borderColor: 'divider',
+            zIndex: 2
+          }}
         >
-          Guardar cambios
-        </Button>
-      </DialogActions>
+          <Stack direction="row" spacing={1}>
+            <Button onClick={onClose} fullWidth variant="outlined">Cancelar</Button>
+            <Button
+              onClick={() => onSave(form)}
+              fullWidth
+              variant="contained"
+              disabled={!form.seller?.trim()}
+            >
+              Guardar
+            </Button>
+          </Stack>
+        </Box>
+      )}
     </Dialog>
   );
 }
