@@ -148,7 +148,25 @@ function normalizeSellerName(name) {
 function App() {
   const [items, setItems] = useState(() => {
     const saved = localStorage.getItem('cocoyoc-properties-v2');
-    return saved ? JSON.parse(saved) : initialProperties;
+    const source = saved ? JSON.parse(saved) : initialProperties;
+    const sellerMap = new Map();
+
+    source.forEach(item => {
+      const key = normalizeSellerName(item.seller);
+      if (!key) return;
+      const current = sellerMap.get(key) || {};
+      sellerMap.set(key, {
+        seller: current.seller || item.seller?.trim(),
+        agency: current.agency || item.agency || '',
+        phone: current.phone || item.phone || '',
+        wa: current.wa || item.wa || normalizeWa(item.phone)
+      });
+    });
+
+    return source.map(item => {
+      const sellerData = sellerMap.get(normalizeSellerName(item.seller));
+      return sellerData ? { ...item, ...sellerData } : item;
+    });
   });
   const [seller, setSeller] = useState('Todos');
   const [query, setQuery] = useState('');
@@ -159,7 +177,22 @@ function App() {
     localStorage.setItem('cocoyoc-properties-v2', JSON.stringify(items));
   }, [items]);
 
-  const sellers = useMemo(() => ['Todos', ...Array.from(new Set(items.map(x => x.seller).filter(Boolean)))], [items]);
+  const sellerProfiles = useMemo(() => {
+    const map = new Map();
+    items.forEach(item => {
+      const key = normalizeSellerName(item.seller);
+      if (!key || map.has(key)) return;
+      map.set(key, {
+        seller: item.seller,
+        agency: item.agency || '',
+        phone: item.phone || '',
+        wa: item.wa || normalizeWa(item.phone)
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.seller.localeCompare(b.seller));
+  }, [items]);
+
+  const sellers = useMemo(() => ['Todos', ...sellerProfiles.map(x => x.seller)], [sellerProfiles]);
 
   const filtered = useMemo(() => items.filter(x => {
     const sellerOk = seller === 'Todos' || x.seller === seller;
@@ -278,34 +311,97 @@ function App() {
           <Add />
         </Fab>
 
-        <EditDialog value={editing} onClose={() => setEditing(null)} onSave={save} />
+        <EditDialog value={editing} sellers={sellerProfiles} onClose={() => setEditing(null)} onSave={save} />
       </Box>
     </ThemeProvider>
   );
 }
 
-function EditDialog({ value, onClose, onSave }) {
+function EditDialog({ value, sellers, onClose, onSave }) {
   const [form, setForm] = useState(value || emptyProperty);
-  useEffect(() => setForm(value || emptyProperty), [value]);
+  const [sellerMode, setSellerMode] = useState('new');
+
+  useEffect(() => {
+    setForm(value || emptyProperty);
+    if (value?.id) {
+      const match = sellers.find(x => normalizeSellerName(x.seller) === normalizeSellerName(value.seller));
+      setSellerMode(match ? normalizeSellerName(match.seller) : 'new');
+    } else {
+      setSellerMode('');
+    }
+  }, [value, sellers]);
+
   if (!value) return null;
+
   const field = name => ({
     value: form[name] ?? '',
     onChange: e => setForm(prev => ({ ...prev, [name]: e.target.value }))
   });
+
+  const selectSeller = e => {
+    const selected = e.target.value;
+    setSellerMode(selected);
+
+    if (selected === 'new') {
+      setForm(prev => ({
+        ...prev,
+        seller: '',
+        agency: '',
+        phone: '',
+        wa: ''
+      }));
+      return;
+    }
+
+    const profile = sellers.find(x => normalizeSellerName(x.seller) === selected);
+    if (profile) {
+      setForm(prev => ({
+        ...prev,
+        seller: profile.seller,
+        agency: profile.agency,
+        phone: profile.phone,
+        wa: profile.wa || normalizeWa(profile.phone)
+      }));
+    }
+  };
+
   return (
     <Dialog open fullScreen onClose={onClose}>
       <AppBar position="sticky" elevation={0}>
         <Toolbar>
           <IconButton edge="start" color="inherit" onClick={onClose}><Close /></IconButton>
-          <Typography variant="h6" sx={{ flex: 1 }}>Editar propiedad</Typography>
+          <Typography variant="h6" sx={{ flex: 1 }}>{value.id ? 'Editar propiedad' : 'Agregar propiedad'}</Typography>
           <Button color="inherit" onClick={() => onSave(form)} sx={{ fontWeight: 800 }}>Guardar</Button>
         </Toolbar>
       </AppBar>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {!value.id && (
+            <TextField
+              select
+              label="¿Quién vende esta casa?"
+              fullWidth
+              value={sellerMode}
+              onChange={selectSeller}
+              helperText="Elige un vendedor existente para precargar sus datos, o crea uno nuevo."
+            >
+              <MenuItem value="" disabled>Selecciona un vendedor</MenuItem>
+              {sellers.map(profile => (
+                <MenuItem key={normalizeSellerName(profile.seller)} value={normalizeSellerName(profile.seller)}>
+                  {profile.seller}
+                </MenuItem>
+              ))}
+              <MenuItem value="new">＋ Nuevo vendedor</MenuItem>
+            </TextField>
+          )}
+
           <TextField label="Nombre de la casa" fullWidth {...field('title')} />
           <TextField label="Precio" type="number" fullWidth {...field('price')} />
-          <TextField label="Vendedor/a" fullWidth {...field('seller')} />
+
+          {(value.id || sellerMode === 'new') && (
+            <TextField label="Vendedor/a" fullWidth {...field('seller')} />
+          )}
+
           <TextField label="Inmobiliaria" fullWidth {...field('agency')} />
           <TextField label="Teléfono" fullWidth {...field('phone')} />
           <TextField label="WhatsApp (solo números)" fullWidth {...field('wa')} />
@@ -316,7 +412,14 @@ function EditDialog({ value, onClose, onSave }) {
       </DialogContent>
       <DialogActions sx={{ p: 2 }}>
         <Button onClick={onClose} fullWidth>Cancelar</Button>
-        <Button onClick={() => onSave(form)} fullWidth variant="contained">Guardar cambios</Button>
+        <Button
+          onClick={() => onSave(form)}
+          fullWidth
+          variant="contained"
+          disabled={!form.seller?.trim()}
+        >
+          Guardar cambios
+        </Button>
       </DialogActions>
     </Dialog>
   );
